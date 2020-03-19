@@ -1,111 +1,81 @@
+from td_lambda import RMSE, RandomWalk, TDLambda
 import pandas as pd
 import numpy as np
-import random
-import math
-import copy
+
+walker = RandomWalk()
+trainset = walker.gen_trainset()
 
 IDEAL_PREDS = [1/6, 1/3, 1/2, 2/3, 5/6]
 
+# Experiment 1
 
-def RMSE(ideal_preds, preds):
-    return min(99, np.sqrt(np.mean(((ideal_preds - preds)**2))))
+LAMBS = [0, 0.1, 0.3, 0.5, 0.7, 0.9, 1]
+errors = []
+opt_lrs = []
+for lamb in LAMBS:
+    print("Lamb: {}".format(lamb))
+    tmp_errs = []
+    for seq_batch in trainset:
+        model = TDLambda()
+        model.fit_batch(seq_batch, lamb, lr=0.01)
+        tmp_errs.append(RMSE(IDEAL_PREDS, model.w))
+    avg_err = np.mean(tmp_errs)
+    print("lambda {} avg err: {}".format(lamb, avg_err))
+    errors.append(avg_err)
 
-
-class RandomWalk:
-    def __init__(self, size=5):
-        self.size = size-1
-        self.state = math.floor(self.size/2)
-        self.X = [self._gen_obs(self.state)]
-
-    def _reset(self):
-        self.state = math.ceil(self.size/2)
-        self.X = [self._gen_obs(self.state)]
-
-    def _gen_obs(self, state):
-        return [1 if i == state else 0 for i in range(self.size+1)]
-
-    def _sequence(self):
-        self._reset()
-        while True:
-            roll = np.random.uniform()
-            if roll >= 0.5:
-                if self.state == self.size:
-                    return self.X
-                else:
-                    self.X.append(self._gen_obs(self.state+1))
-                    self.state += 1
-            else:
-                if self.state == 0:
-                    return self.X
-                else:
-                    self.X.append(self._gen_obs(self.state-1))
-                    self.state -= 1
-        return self.X
-
-    def _gen_sequences(self, size=10):
-        return [self._sequence() for _ in range(size)]
-
-    def gen_trainset(self, size=100):
-        return np.array([self._gen_sequences() for _ in range(size)])
+exp1_df = pd.DataFrame({'lambda': LAMBS,
+                        'error': errors}).to_csv("exp_1_results.csv")
 
 
-class TDLambda:
-    def __init__(self):
-        self.lamb = None
-        self.lr = None
-        self.conv_tol = None
-        self.max_iter = None
-        self.w = None
+# Experiment 2
 
-    def reset_weights(self, size=5):
-        self.w = np.array([0.5 for _ in range(size)])
+LAMBS = [0, 0.3, 0.8, 1]
+lrs = [i/20 for i in range(13)]
 
-    # policy function gradient
-    def _grad_tail(self, s, explored, lamb):
-        e = np.sum([lamb**(len(explored)-1-k)*np.array(s)
-                    for k, s in enumerate(explored)], axis=None)
-        return e
+errors = []
 
-    # run through a sequence, accumulating a gradient
-    # to add at the end of the sequence
-    def _sequence(self, sequence, lamb, lr):
-        w_delts = np.zeros(len(self.w))
-        explored = []
-        for i, s in enumerate(sequence):
-            explored.append(s)
-            if i+1 == len(sequence):
-                e = np.sum([lamb**(len(explored)-1-k)*np.array(s)
-                            for k, s in enumerate(explored)], axis=None)
-                if s[0] == 1:
-                    z = 0.0
-                else:
-                    z = 1.0
-                w_delts += [lr*(z - np.dot(self.w, s))*e if i == 1 else 0
-                            for i in s]
-                break
-            s_next = sequence[i+1]
-            p_next = np.dot(self.w, np.transpose(s_next))
-            p = np.dot(self.w, np.transpose(s))
-            td = (p_next - p)
-            grad_tail = self._grad_tail(s, explored, lamb)
-            w_delts += [lr*td*grad_tail if i == 1 else 0 for i in s]
-        self.w += w_delts
+for lamb in LAMBS:
+    for lr in lrs:
+        model = TDLambda()
+        print("Training lamba = {}, lr = {}".format(lamb, lr))
+        tmp_errs = []
+        for seq_batch in trainset:
+            model.reset_weights()
+            for seq in seq_batch:
+                model._sequence(seq, lamb, lr)
+            tmp_errs.append(RMSE(IDEAL_PREDS, model.w))
+        errors.append((lamb, lr, np.mean(tmp_errs)))
+        print("lambda {}, lr {} SCORE: {}".format(lamb, lr, np.mean(tmp_errs)))
 
-    # Fit a model against a batch of 10 sequences until
-    # convergence
-    def fit_batch(self, seq_batch, lamb, lr=0.3,
-                  conv_tol=0.0001, max_iter=300, reset_w=True):
-        self.lamb = lamb
-        self.lr = lr
-        self.conv_tol = conv_tol
-        self.max_iter = max_iter
-        if reset_w:
-            self.w = np.array([0.5 for _ in range(5)])
-        i = 0
-        conv = 99
-        while conv >= self.conv_tol and i < self.max_iter:
-            seq_idx = np.random.randint(0, len(seq_batch)-1)
-            prev_w = copy.copy(self.w)
-            self._sequence(seq_batch[seq_idx], lamb, lr)
-            conv = RMSE(prev_w, self.w)
-            i += 1
+pd.DataFrame({'lamb': [v[0] for v in errors],
+              'lr': [v[1] for v in errors],
+              'error': [v[2] for v in errors]}).to_csv("results/exp_2_results.csv")
+
+
+# Experiment 3
+
+LAMBS = [i/10 for i in range(11)]
+lrs = [i/20 for i in range(13)]
+errors = []
+opt_lrs = []
+for lamb in LAMBS:
+    print("Lamb: {}".format(lamb))
+    tmp_errs = []
+    for seq_batch in trainset:
+        model = TDLambda()
+        model.reset_weights()
+        lr_scores = []
+        for lr in lrs:
+            model.reset_weights()
+            for seq in seq_batch:
+                model._sequence(seq, lamb, lr)
+            lr_scores.append(RMSE(IDEAL_PREDS, model.w))
+        opt_lr, score = (lrs[np.argmin(lr_scores)], lr_scores[np.argmin(lr_scores)])
+        tmp_errs.append(score)
+        opt_lrs.append(opt_lr)
+    avg_err = np.mean(tmp_errs)
+    print("lambda {} avg err: {}".format(lamb, avg_err))
+    errors.append(avg_err)
+
+pd.DataFrame({'lambda': LAMBS,
+              'error': errors}).to_csv("exp_3_results.csv")
